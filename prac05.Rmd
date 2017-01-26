@@ -1,0 +1,197 @@
+---
+title: "Approaches to Clustering Big Data"
+author: "Miles McBain"
+date: "23 January 2017"
+output: html_document
+---
+
+#Introduction
+In this practical we will use the 'Clustering Large Applications (CLARA)' library to do some unsupervised learning on a dataset of recipies. The goal is to find a clustering scheme of recipes that provides an insightful and useful way to categorise them for users of the online website.
+
+The dataset is taken from here:[https://www.kaggle.com/hugodarwood/epirecipes](https://www.kaggle.com/hugodarwood/epirecipes).
+
+#Prerequisites
+```{r, message=FALSE}
+#install.packages(c("purrr"))
+library(caret)
+library(cluster)
+library(dplyr)
+library(here)
+library(knitr)
+library(purrr)
+library(readr)
+```
+
+#Load Data
+```{r, message = FALSE}
+#For your laptop
+#PRAC_HOME <- here::here()
+#For the lab computer
+PRAC_HOME <- "/users/ugrad/amsi_705/MSBigData/Practicals/prac05"
+
+recipe_data <- read_csv(file.path(PRAC_HOME, "data/epi_r.csv"))
+```
+
+#Inspect
+```{r}
+dim(recipe_data)
+```
+
+Use `View()` to look at the data. Is it tidy?
+
+Each recipe has 680 datapoints most of which correspond to the presence or absence of various ingredients. Some of the covariates correspond to the presence of absence of various tags like: `backyard bbq` or `australia`. This gives us a wide dataset typical of what you can expect with text analysis, where each covariate represents the presence or absence of a word.
+
+#Process Data
+`clara` can handles NA values and scaling for us automatically. However It is worth examining how to deal with these issues ourselves since this facility is not commong among clustering packages.
+
+## Filter Outliers 
+```{r}
+   recipe_data %>%
+   filter(calories > 10000) %>%
+   select(title, rating, calories, protein, fat, sodium) %>%
+   kable()
+ 
+```
+
+**Discuss:**
+
+* How do outliers affect clustering? Which would you filter in this case?
+
+##Find and handle NAs
+```{r}
+#Find NAs
+recipe_data %>%
+    map(anyNA) %>%
+    unlist() %>%
+    which(arr.ind = TRUE)
+
+recipe_data_NA_ind <-
+    recipe_data %>%
+    mutate(calories_na = if_else(is.na(calories), true = 1, false = 0),
+           protein_na = if_else(is.na(protein), true = 1, false = 0),
+           fat_na = if_else(is.na(fat), true = 1, false = 0),
+           sodium_na = if_else(is.na(sodium), true = 1, false = 0),
+           calories = if_else(is.na(calories), true = 0, false = calories),
+           protein = if_else(is.na(protein), true = 0, false = protein),
+           fat = if_else(is.na(fat), true = 0, false = fat),
+           sodium = if_else(is.na(sodium), true = 0, false = sodium))
+
+
+```
+There are NAs in the data. The code above is one strategy to handle them.
+
+**Discuss:**
+
+* How does the code above deal with NAs? Is this a method you have seen before?
+
+##Scale Variables
+
+### Scaling on 0-1
+```{r}
+scale01 <- function(x){(x - min(x, na.rm = TRUE))/(max(x, na.rm = TRUE) - min(x, na.rm = TRUE))}
+
+recipe_data_scaled <-
+    recipe_data_NA_ind %>%
+    mutate( calories = scale01(calories),
+            protein = scale01(protein),
+            fat = scale01(fat),
+            sodium = scale01(sodium))
+```
+
+
+**Discuss:**
+
+* How would the process of minimising Euclidean distance measures be affected by data on different scales? 
+* How does the code above scale variables between 0 and 1? Why would we choose 0-1 and not a Z-Score here?
+
+##Drop columns not intended for analysis.
+```{r}
+recipe_data_scaled_numeric <-
+    recipe_data_scaled %>%
+    select(-title, -rating)
+```
+
+## Clustering
+
+```{r}
+kmedianfits <- clara(x = recipe_data_scaled_numeric, 
+                     k = 5,
+                     metric = "manhattan",
+                     stand = FALSE, #Indicates our data is already standardised. Try TRUE.
+                     samples = 50,
+                     pamLike = TRUE,
+                     correct.d = TRUE)
+meds_df <- kmedianfits$medoids %>% as.data.frame()
+```
+
+**Discuss:**
+
+* What does `metric = "manhattan"` mean for the distance measures used in clustering?
+
+## interpret Output
+View a plot of the clusters:
+```{r}
+clusplot(kmedianfits)
+```
+
+**Discuss:**
+
+* This plot has 2 'Components' and yet our data had 680 variables. What has been done to the data?
+* How do you interpret the statemnt of % of point variability?
+
+Since we clustered using Manhattan distance, the sum of squares is not available as a diagnostic. (Why?). Look at the the description of `clusinfo` in `help(clara.object)` and then as clusinfo:
+```{r}
+kable(kmedianfits$clusinfo)
+```
+
+**Discuss:**
+
+* How do you judge the quality of this scheme according according to `clusinfo`?.
+
+View the cluster centres with columns that do not vary between clusters removed:
+
+```{r, eval=FALSE}
+meds_df[, -nearZeroVar(meds_df)] %>% View()
+```
+
+**Discuss:**
+
+* Looking at the centre of each cluster, can you come up with themes for each cluster?
+
+#Principle Component Analysis
+
+One of the reasons the clustering performed poorly and was hard to interpret was sparsity of ingredients and tags. We can try to reduce the dimensionality of the data using PCA to address this problem.
+
+```{r}
+pca_fit <- prcomp(recipe_data_scaled_numeric)
+```
+
+With this many components viewing the output can be difficult. Inspect the output of `plot(pca_fit)` and the proportion of variance explained in `cumsum(pca_fit$sdev)/sum(pca_fit$sdev)`.
+
+**Discuss**
+
+* Use `View(pca_fit$rotation)` to see the relationships between data and PCs. Can you assign some broad meaning to each of the first few PCs? 
+
+Choose a number of Principle Components to refit the clustering scheme with:
+```{r}
+N_COMPS <- 7
+rotated_data <- predict(pca_fit, recipe_data_scaled_numeric)[,1:N_COMPS]
+
+kmedianfits_pca <- clara(x = recipe_data_scaled_numeric, 
+                     k = 5,
+                     metric = "manhattan",
+                     stand = FALSE, #Indicates our data is already standardised. Try TRUE.
+                     samples = 50,
+                     pamLike = TRUE,
+                     correct.d = TRUE)
+meds_df_pca <- kmedianfits_pca$medoids %>% as.data.frame()
+
+kable(kmedianfits_pca$clusinfo)
+```
+
+**Discuss:**
+
+* How do you rate the performance of clustering on your reduced dataset?
+
+#Extension
+As an extension to this prac you could fit the Clustering scheme in Spark or H2O. The web interface to H2O (H2OFlow) would be an interesting way to do this.
