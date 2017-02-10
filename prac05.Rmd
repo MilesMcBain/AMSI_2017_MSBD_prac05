@@ -177,7 +177,7 @@ Choose a number of Principle Components to refit the clustering scheme with:
 N_COMPS <- 7
 rotated_data <- predict(pca_fit, recipe_data_scaled_numeric)[,1:N_COMPS]
 
-kmedianfits_pca <- clara(x = recipe_data_scaled_numeric, 
+kmedianfits_pca <- clara(x = rotated_data, 
                      k = 5,
                      metric = "manhattan",
                      stand = FALSE, #Indicates our data is already standardised. Try TRUE.
